@@ -3,6 +3,7 @@ gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 from gi.repository import Gdk
 from configparser import SafeConfigParser
+import threading
 import re
 import os
 
@@ -30,41 +31,32 @@ class MainWindow(Gtk.Window):
 
         self.sell = Gtk.Button(label="Sell Items = False")
         self.gold = Gtk.Button(label="Take Out Gold = False")
+        self.packages_download = Gtk.Button(label="Download Packages = False")
         self.pause = Gtk.Button(label="Pause Bot = False")
-        self.headless = Gtk.Button(label="Headless Mode = False")
-        self.sleep = Gtk.Button(label="Sleep Mode = False")
         self.settings = Gtk.Button(label="Open Settings")
         self.status = Gtk.Button(label="Show Current Info")
         
-        self.headless_checked = False
-        if config.get('top', 'headless') == "True":
-            self.headless_checked = True
         self.headless_c = Gtk.CheckButton()
-        self.headless_c.set_active(self.headless_checked)
+        self.headless_c.set_active(return_bool("top","headless"))
         self.headless_c.set_label("Headless Mode")
-
-        self.sleep_checked = False
-        if config.get('top','sleep') == "True":
-            self.sleep_checked = True
+        
         self.sleep_c = Gtk.CheckButton()
-        self.sleep_c.set_active(self.sleep_checked)
+        self.sleep_c.set_active(return_bool("top","sleep"))
         self.sleep_c.set_label("Sleep Mode")
 
         self.sell.connect("clicked",self.on_sell_clicked)
         self.gold.connect("clicked",self.on_gold_clicked)
         self.pause.connect("clicked",self.on_pause_clicked)
-        self.headless.connect("clicked",self.on_headless_clicked)
-        self.sleep.connect("clicked",self.on_sleep_clicked)
         self.settings.connect("clicked",self.on_settings_clicked)
         self.status.connect("clicked",self.on_status_clicked)
         self.headless_c.connect("clicked", self.on_clicked_headless_c)
         self.sleep_c.connect("clicked",self.on_clicked_sleep_c)
+        self.packages_download.connect("clicked",self.on_clicked_packages)
 
         self.box.pack_start(self.sell, False, False, 0)
         self.box.pack_start(self.gold, False, False, 0)
+        self.box.pack_start(self.packages_download, False, False, 0)
         self.box.pack_start(self.pause, False, False, 0)
-        self.box.pack_start(self.headless, False, False, 0)
-        self.box.pack_start(self.sleep, False, False, 0)
         self.box.pack_start(self.settings, False, False, 0)
         self.box.pack_start(self.status, False, False, 0)
         self.box.pack_start(self.headless_c, False, False, 0)
@@ -75,12 +67,20 @@ class MainWindow(Gtk.Window):
         self.set_resizable(False)
 
 
+    def on_clicked_packages(self, widget):
+        if return_bool('top','force_gold') or return_bool('top','force_sell') or return_bool('top','force_packages_download'):
+            Alert().show_all()
+        else:
+            config.set('top','force_packages_download','True')
+            self.packages_download.set_label("Download Packages = True")
+        config_save()        
+        
     def on_delete_event(self, widget, data):
         s = 'top'
-        config.set(s,'force_headless','False')
-        config.set(s,'force_sleep','False')
         config.set(s,'force_sell','False')
         config.set(s,'force_gold','False')
+        config.set(s,'force_packages_download','False')
+        config.set("temporary","exit_dungeons","False")
         config_save()
         Gtk.main_quit()
 
@@ -103,7 +103,7 @@ class MainWindow(Gtk.Window):
         config_save()
 
     def on_sell_clicked(self, widget):
-        if config.get('top','force_gold') == "True" or config.get('top','force_sell') == "True":
+        if return_bool('top','force_gold') or return_bool('top','force_sell') or return_bool('top','force_packages_download'):
             Alert().show_all()
         else:
             config.set('top','force_sell','True')
@@ -111,7 +111,7 @@ class MainWindow(Gtk.Window):
         config_save()
 
     def on_gold_clicked(self, widget):
-        if config.get('top','force_sell') == "True" or config.get('top','force_gold') == "True":
+        if return_bool('top','force_sell') or return_bool('top','force_gold') or return_bool('top','force_packages_download'):
             Alert().show_all()
         else:
             config.set('top','force_gold','True')
@@ -127,24 +127,6 @@ class MainWindow(Gtk.Window):
             self.pause.set_label("Pause Bot = True")
         config_save()
 
-    def on_headless_clicked(self, widget):
-        if config.get('top','force_headless') == "True":
-            config.set('top','force_headless','False')
-            self.headless.set_label("Headless Mode = False")
-        else:
-            config.set('top','force_headless','True')
-            self.headless.set_label("Headless Mode = True")
-        config_save()
-
-    def on_sleep_clicked(self, widget):
-        if config.get('top','force_sleep') == "True":
-            config.set('top','force_sleep','False')
-            self.sleep.set_label("Sleep Mode = False")
-        else:
-            config.set('top','force_sleep','True')
-            self.sleep.set_label("Sleep Mode = True")
-        config_save()
-        
     def on_status_clicked(self, widget):
         return
 
@@ -232,7 +214,7 @@ class SettingsLogin(Gtk.Window):
         self.server.append_text("Server 38")
         self.server.append_text("Server 39")
         self.server.append_text("Server 40")
-        self.server.set_active(int(config.get('login','server')))
+        self.server.set_active(self.server_option_load())
 
         self.box.pack_start(self.txt, False, False, 0)
         self.box.pack_start(self.txt2, False, False, 0)
@@ -246,9 +228,50 @@ class SettingsLogin(Gtk.Window):
         section = "login"
         config.set(section, "nickname",self.txt.get_text())
         config.set(section, "password", self.txt2.get_text())
-        config.set(section, "server", str(self.server.get_active()))
+        config.set(section, "server", self.server_option_save())
         config_save()
-        return
+
+    def server_option_load(self):
+        temporary = int(config.get("login","server"))
+        if temporary == 1:
+            return 0
+        elif temporary == 25:
+            return 1
+        elif temporary == 34:
+            return 2
+        elif temporary == 35:
+            return 3
+        elif temporary == 36:
+            return 4
+        elif temporary == 37:
+            return 5
+        elif temporary == 38:
+            return 6
+        elif temporary == 39:
+            return 7
+        elif temporary == 40:
+            return 8
+
+    def server_option_save(self):
+        temporary = self.server.get_active()
+        if temporary == 0:
+            return "1"
+        elif temporary == 1:
+            return "25"
+        elif temporary == 2:
+            return "34"
+        elif temporary == 3:
+            return "35"
+        elif temporary == 4:
+            return "36"
+        elif temporary == 5:
+            return "37"
+        elif temporary == 6:
+            return "38"
+        elif temporary == 7:
+            return "39"
+        elif temporary == 8:
+            return "40"
 
 class SettingsFarm(Gtk.Window):
     def __init__(self):
@@ -266,7 +289,7 @@ class SettingsFarm(Gtk.Window):
         self.expedition_option.append_text("2. Second")
         self.expedition_option.append_text("3. Third")
         self.expedition_option.append_text("4. Fourth")
-        self.expedition_option.set_active(int(config.get('farm','expedition_option')))
+        self.expedition_option.set_active(int(config.get('farm','expedition_option'))-1)
 
         self.dungeon = Gtk.CheckButton()
         self.dungeon.set_active(return_bool("farm","dungeon"))
@@ -276,7 +299,10 @@ class SettingsFarm(Gtk.Window):
         self.dungeon_option.set_entry_text_column(0)
         self.dungeon_option.append_text("1. Normal")
         self.dungeon_option.append_text("2. Advenced")
-        self.dungeon_option.set_active(int(config.get('farm','dungeon_option')))
+        if not return_bool("farm","dungeon_advenced"):
+            self.dungeon_option.set_active(0)
+        else:
+            self.dungeon_option.set_active(1)
 
         self.event = Gtk.CheckButton()
         self.event.set_active(return_bool("farm","event"))
@@ -295,10 +321,13 @@ class SettingsFarm(Gtk.Window):
     def save_settings(self, widget, data):
         section = "farm"
         config.set(section, "expedition",str(self.expedition.get_active()))
-        config.set(section, "expedition_opton", str(self.expedition_option.get_active()))
+        config.set(section, "expedition_option", str(self.expedition_option.get_active()+1))
+        if self.dungeon_option.get_active() == 0:
+            config.set(section,"dungeon_advenced","False")
+        else:
+            config.set(section,"dungeon_advenced","True")
         config.set(section, "dungeon", str(self.dungeon.get_active()))
-        config.set(section, "dungeon_option", str(self.dungeon_option.get_active()))
-        return
+        config_save()
 
 class SettingsFood(Gtk.Window):
     def __init__(self):
@@ -316,7 +345,7 @@ class SettingsFood(Gtk.Window):
 
         self.food = Gtk.CheckButton()
         self.food.set_active(return_bool("food","food"))
-        self.food.set_label("Refill Food [Backpack]")
+        self.food.set_label("Refill Food")
 
         self.food_option = Gtk.ComboBoxText()
         self.food_option.set_entry_text_column(0)
@@ -325,7 +354,7 @@ class SettingsFood(Gtk.Window):
         self.food_option.append_text("III")
         self.food_option.append_text("IV")
         self.food_option.append_text("V")
-        self.food_option.set_active(int(config.get('food','food_option')))
+        self.food_option.set_active(read_backpack("food","food_option"))
 
         self.box.pack_start(self.heal, False, False, 0)
         self.box.pack_start(self.health_level, False, False, 0)
@@ -340,9 +369,8 @@ class SettingsFood(Gtk.Window):
     def save_settings(self, widget, data):
         section = "food"
         config.set(section, "food", str(self.food.get_active()))
-        config.set(section, "food_option", str(self.food_option.get_active()))
+        config.set(section, "food_option", save_backpack(self.food_option.get_active()))
         config_save()
-        return
 
 class SettingsGold(Gtk.Window):
     def __init__(self):
@@ -393,6 +421,15 @@ class SettingsSell(Gtk.Window):
         self.sell.set_active(return_bool("sell","sell"))
         self.sell.set_label("Sell Items")
 
+        self.sell_option = Gtk.ComboBoxText()
+        self.sell_option.set_entry_text_column(0)
+        self.sell_option.append_text("I")
+        self.sell_option.append_text("II")
+        self.sell_option.append_text("III")
+        self.sell_option.append_text("IV")
+        self.sell_option.append_text("V")
+        self.sell_option.set_active(read_backpack('sell','sell_option'))
+
         self.weapons = Gtk.CheckButton()
         self.weapons.set_active(return_bool("sell","weapons"))
         self.weapons.set_label("weapons")
@@ -441,15 +478,6 @@ class SettingsSell(Gtk.Window):
         self.scrolls.set_active(return_bool("sell","scrolls"))
         self.scrolls.set_label("scrolls")
 
-        self.sell_option = Gtk.ComboBoxText()
-        self.sell_option.set_entry_text_column(0)
-        self.sell_option.append_text("I")
-        self.sell_option.append_text("II")
-        self.sell_option.append_text("III")
-        self.sell_option.append_text("IV")
-        self.sell_option.append_text("V")
-        self.sell_option.set_active(int(config.get('sell','sell_option')))
-
         self.box.pack_start(self.sell, False, False, 0)
         self.box.pack_start(self.sell_option, False, False, 0)
         self.box.pack_start(self.weapons, False, False, 0)
@@ -479,7 +507,7 @@ class SettingsSell(Gtk.Window):
     def save_settings(self, widget, data):
         section = "sell"
         config.set(section,'sell', str(self.sell.get_active()))
-        config.set(section,'sell_option',str(self.sell_option.get_active()))
+        config.set(section,'sell_option',save_backpack(self.sell_option.get_active()))
         config.set(section,'weapons',str(self.weapons.get_active()))
         config.set(section,'shields',str(self.shields.get_active()))
         config.set(section,'plates',str(self.plates.get_active()))
@@ -511,7 +539,7 @@ class SettingsExtract(Gtk.Window):
         self.extract_option.append_text("III")
         self.extract_option.append_text("IV")
         self.extract_option.append_text("V")
-        self.extract_option.set_active(int(config.get('extract','extract_option')))
+        self.extract_option.set_active(read_backpack('extract','extract_option'))
 
         self.components = Gtk.CheckButton()
         self.components.set_active(return_bool("extract","send_components"))
@@ -543,7 +571,7 @@ class SettingsExtract(Gtk.Window):
     def save_settings(self, widget, data):
         section = "extract"
         config.set(section,'extract',str(self.extract.get_active()))
-        config.set(section,'extract_option',str(self.extract_option.get_active()))
+        config.set(section,'extract_option',save_backpack(self.extract_option.get_active()))
         config.set(section,'components',str(self.components.get_active()))
         config.set(section,'purple',str(self.purple.get_active()))
         config.set(section,'orange',str(self.orange.get_active()))
@@ -607,21 +635,41 @@ class SettingsBuy(Gtk.Window):
         config.set(section,"food",str(self.food.get_active()))
         config_save()
 
-
-
-
-
 def return_bool(section, string):
     if config.get(section, string) == "True":
         return True
     else:
         return False
 
+def save_backpack(option):
+    if option == 0:
+        return "512"
+    elif option == 1:
+        return "513"
+    elif option == 2:
+        return "514"
+    elif option == 3:
+        return "515"
+    elif option == 4:
+        return "516"
+
+def read_backpack(section, variable):
+    backpack = config.get(section, variable)
+    if backpack == "512":
+        return 0
+    elif backpack == "513":
+        return 1
+    elif backpack == "514":
+        return 2
+    elif backpack == "515":
+        return 3
+    elif backpack == "516":
+        return 4
+
 def config_save():
     with open('config.ini','w') as file:
         config.write(file)
-    return
+
 mWindow = MainWindow()
 mWindow.show_all()
-
 Gtk.main()
